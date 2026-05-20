@@ -88,18 +88,18 @@ Generated with deepseek-v4 + gpt-image-2 + happy-horse-1.0
 <div align="center">
 <table align="center" border="0" cellspacing="0" cellpadding="0" style="border:none; border-collapse:collapse; margin:0 auto;">
   <tr>
-    <td align="center" valign="top" width="25%" style="border:none;"></td>
-    <td align="center" valign="top" width="25%" style="border:none;">
+    <td align="center" valign="bottom" width="25%" style="border:none;"></td>
+    <td align="center" valign="bottom" width="25%" style="border:none;">
       <video src="https://github.com/user-attachments/assets/627e961e-bd0e-449c-987e-9bae34b669c7" controls width="100%" preload="none"></video>
       <br><b>▶️ Breaking the Wall</b>
     </td>
-    <td align="center" valign="top" width="25%" style="border:none;">
+    <td align="center" valign="bottom" width="25%" style="border:none;">
       <a href="https://github.com/user-attachments/assets/ebb47cb8-fa9f-4557-b70c-ff6368ee0b6c" target="_blank">
         <img src="https://github.com/user-attachments/assets/40e3efa4-9923-48ce-bde8-3c7d0f1b6a16" alt="deepseek-v4 cover" width="100%" />
       </a>
       <br><b>▶️ Breaking the Wall (Original Quality)</b>
     </td>
-    <td align="center" valign="top" width="25%" style="border:none;"></td>
+    <td align="center" valign="bottom" width="25%" style="border:none;"></td>
   </tr>
 </table>
 </div>
@@ -301,19 +301,19 @@ Generated with deepseek-v4 + gpt-image-2 + happy-horse-1.0
 <div align="center">
 <table align="center" border="0" cellspacing="0" cellpadding="0" style="border:none; border-collapse:collapse; margin:0 auto;">
   <tr>
-    <td align="center" valign="top" width="25%" style="border:none;">
+    <td align="center" valign="bottom" width="25%" style="border:none;">
       <img src="https://github.com/user-attachments/assets/a64edad6-dba3-440b-941c-75931a196ec9" width="100%" />
       <br><b>🖼️ Input Image (Lemon Rat)</b>
     </td>
-    <td align="center" valign="top" width="25%" style="border:none;">
+    <td align="center" valign="bottom" width="25%" style="border:none;">
       <video src="https://github.com/user-attachments/assets/21ce51bd-fbce-4772-9b8b-08532187f993" controls width="100%" preload="none"></video>
       <br><b>🎬 Input Reference Video</b>
     </td>
-    <td align="center" valign="top" width="25%" style="border:none;">
+    <td align="center" valign="bottom" width="25%" style="border:none;">
       <video src="https://github.com/user-attachments/assets/5eda5bdf-1180-4803-a6ea-34a7366148fb" controls width="100%" preload="none"></video>
       <br><b>🚀 Generation Result</b>
     </td>
-    <td align="center" valign="top" width="25%" style="border:none;"></td>
+    <td align="center" valign="bottom" width="25%" style="border:none;"></td>
   </tr>
 </table>
 </div>
