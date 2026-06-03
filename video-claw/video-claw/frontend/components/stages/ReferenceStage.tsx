@@ -156,7 +156,7 @@ function SceneRow({
   const isRunning = scene.status === 'running' || isRegenerating;
   const isPending = scene.status === 'pending';
   const isFailed = scene.status === 'failed' && !isRegenerating;
-  const isPendingEmpty = scene.status === 'pending' && !scene.versions.length && !isRegenerating;
+  const hasImage = Boolean(getSelected(scene)) || scene.versions.length > 0;
   const hasChanges = editDesc !== scene.description;
 
   return (
@@ -219,8 +219,8 @@ function SceneRow({
             <p className="text-xs text-gray-600 leading-relaxed whitespace-pre-wrap">{scene.description}</p>
           </div>
         )}
-        {/* 重新生成按钮 */}
-        {!isStageRunning && (
+        {/* 已有图片显示重新生成；失败但无图片时也必须允许重试。 */}
+        {!isStageRunning && (hasImage || isFailed) && (
           <button
             onClick={onRegenerate}
             disabled={isRegenerating}
@@ -240,37 +240,37 @@ function SceneRow({
 
       {/* 右侧: 图片画廊 / 占位 */}
       <div className="flex-1 min-w-0 p-3 flex items-center">
-        {isPendingEmpty ? (
-          <div
-            className="flex items-center justify-center h-28 aspect-video bg-emerald-50/50 rounded-lg border border-dashed border-emerald-200 cursor-pointer hover:bg-emerald-100/50 transition-colors"
-            onClick={onRegenerate}
-          >
-            <div className="flex flex-col items-center gap-1 text-emerald-500 text-xs">
-              <ImagePlus className="w-4 h-4" />
-              <span>生成首帧参考图</span>
-            </div>
-          </div>
-        ) : isRunning && !scene.versions.length ? (
+        {isRunning && !hasImage ? (
           <div className="flex items-center justify-center h-28 aspect-video bg-gray-50 rounded-lg border border-dashed border-gray-200">
             <div className="flex items-center gap-2 text-gray-400 text-xs">
               <Loader className="w-4 h-4 animate-spin" />
               <span>正在生成...</span>
             </div>
           </div>
-        ) : isPending && !scene.versions.length ? (
-          <div className="flex items-center justify-center h-28 aspect-video bg-gray-50/30 rounded-lg border border-dashed border-gray-200">
-            <div className="flex items-center gap-2 text-gray-400 text-xs text-center px-4">
-              <span>等待生成...</span>
-            </div>
-          </div>
-        ) : isFailed && !scene.versions.length ? (
-          <div
-            className="flex items-center justify-center h-28 aspect-video bg-red-50/50 rounded-lg border border-dashed border-red-200 cursor-pointer hover:bg-red-100/50 transition-colors"
-            onClick={onRegenerate}
-          >
-            <div className="flex flex-col items-center gap-1 text-red-400 text-xs">
+        ) : !hasImage ? (
+          <div className="flex items-center justify-center h-28 aspect-video bg-gray-50/60 rounded-lg border border-dashed border-gray-200">
+            <div className="flex flex-col items-center gap-1 text-gray-400 text-xs">
+              {isFailed ? (
+                <>
               <AlertCircle className="w-4 h-4" />
-              <span>生成失败，点击重试</span>
+                  <span>生成失败</span>
+                  {!isStageRunning && (
+                    <button
+                      onClick={onRegenerate}
+                      disabled={isRegenerating}
+                      className="mt-1 inline-flex items-center gap-1 px-2 py-1 rounded-lg text-[10px] font-medium text-red-600 bg-red-50 hover:bg-red-100 transition-colors disabled:text-gray-400 disabled:bg-gray-100 disabled:cursor-not-allowed"
+                    >
+                      <RefreshCw className="w-2.5 h-2.5" />
+                      点击重试
+                    </button>
+                  )}
+                </>
+              ) : (
+                <>
+                  <ImagePlus className="w-4 h-4" />
+                  <span>{isPending ? '等待生成...' : '暂无图片'}</span>
+                </>
+              )}
             </div>
           </div>
         ) : (
@@ -302,6 +302,7 @@ export default function ReferenceStage({ state, sessionId, onConfirm, onInterven
   const [editDescs, setEditDescs] = useState<Record<string, string>>({});
   const [selectedVersions, setSelectedVersions] = useState<Record<string, string>>({});
   const [regeneratingIds, setRegeneratingIds] = useState<Set<string>>(new Set());
+  const regenerationStartCounts = useRef<Record<string, number>>({});
   const [editingIds, setEditingIds] = useState<Set<string>>(new Set());
   const [savingIds, setSavingIds] = useState<Set<string>>(new Set());
 
@@ -359,11 +360,25 @@ export default function ReferenceStage({ state, sessionId, onConfirm, onInterven
     }
   }, [scenes]);
 
-  // 当 artifact 更新时清除重新生成状态
+  // 当对应片段新增版本或失败时，仅清除该片段的重新生成状态，支持多个任务并行。
   useEffect(() => {
-    if (regeneratingIds.size > 0) setRegeneratingIds(new Set());
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [state.artifact]);
+    if (regeneratingIds.size === 0) return;
+    setRegeneratingIds(prev => {
+      let changed = false;
+      const next = new Set(prev);
+      for (const id of prev) {
+        const scene = scenes.find(item => item.id === id);
+        if (!scene) continue;
+        const startCount = regenerationStartCounts.current[id] ?? 0;
+        if ((scene.versions?.length || 0) > startCount || scene.status === 'failed') {
+          next.delete(id);
+          delete regenerationStartCounts.current[id];
+          changed = true;
+        }
+      }
+      return changed ? next : prev;
+    });
+  }, [scenes, regeneratingIds.size]);
 
   const hasScenes = scenes.length > 0;
 
@@ -427,6 +442,8 @@ export default function ReferenceStage({ state, sessionId, onConfirm, onInterven
   };
 
   const handleRegenerate = (sceneId: string) => {
+    const scene = scenes.find(item => item.id === sceneId);
+    regenerationStartCounts.current[sceneId] = scene?.versions?.length || 0;
     setRegeneratingIds(prev => {
       const next = new Set(prev);
       next.add(sceneId);

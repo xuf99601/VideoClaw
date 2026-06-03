@@ -682,6 +682,13 @@ export default function WorkflowPanel() {
   // ── 用户介入修改 ──
   const handleIntervene = async (stageId: string, modifications: Record<string, any>) => {
     if (!sessionId) return;
+    const isBackgroundItemRegeneration =
+      (stageId === 'character_design' && (
+        Array.isArray(modifications.regenerate_characters) ||
+        Array.isArray(modifications.regenerate_settings)
+      )) ||
+      (stageId === 'reference_generation' && Array.isArray(modifications.regenerate_scenes)) ||
+      (stageId === 'video_generation' && Array.isArray(modifications.regenerate_clips));
     
     // 构建完整的 inputData 传给后端，确保比例等参数能传递
     const inputData: Record<string, any> = {
@@ -695,6 +702,8 @@ export default function WorkflowPanel() {
       image_t2i_model: projectParams?.image_t2i_model,
       image_it2i_model: projectParams?.image_it2i_model,
       video_model: projectParams?.video_model,
+      video_sound: videoSound,
+      video_shot_type: videoShotType,
     };
 
     // 设置 running 状态以便显示进度条（如 Logline 选择后生成剧本）
@@ -705,16 +714,22 @@ export default function WorkflowPanel() {
       : modifications.selected_mode
         ? { phase: 'generating', selected_logline: stageStates[stageId]?.artifact?.selected_logline }
         : undefined;
-    setIsRunning(true);
-    updateStageState(stageId, { status: 'running', progress: 0, progressMessage: '处理中...', ...(artifactPatch ? { artifact: artifactPatch } : {}) });
+    if (!isBackgroundItemRegeneration) {
+      setIsRunning(true);
+      updateStageState(stageId, { status: 'running', progress: 0, progressMessage: '处理中...', ...(artifactPatch ? { artifact: artifactPatch } : {}) });
+    } else if (artifactPatch) {
+      updateStageState(stageId, { artifact: artifactPatch });
+    }
     try {
       const response = await intervene(sessionId, stageId, inputData);
       for await (const event of parseStreamEvents(response)) {
         if (event.type === 'progress') {
-          updateStageState(stageId, {
-            progress: event.percent || 0,
-            progressMessage: event.message || '',
-          });
+          if (!isBackgroundItemRegeneration) {
+            updateStageState(stageId, {
+              progress: event.percent || 0,
+              progressMessage: event.message || '',
+            });
+          }
           // 处理 asset_complete 实时事件
           if (event.data?.asset_complete) {
             const assetUpdate = event.data.asset_complete;
@@ -790,7 +805,11 @@ export default function WorkflowPanel() {
           }
         } else if (event.type === 'stage_complete') {
           const artResult = await getArtifact(sessionId, stageId);
-          updateStageState(stageId, { artifact: artResult.artifact, status: 'waiting' });
+          if (isBackgroundItemRegeneration) {
+            updateStageState(stageId, { artifact: artResult.artifact });
+          } else {
+            updateStageState(stageId, { artifact: artResult.artifact, status: 'waiting' });
+          }
         } else if (event.type === 'error') {
           console.error('Intervention error:', event.content);
         }
@@ -798,7 +817,9 @@ export default function WorkflowPanel() {
     } catch (error: any) {
       console.error('Intervention error:', error);
     } finally {
-      setIsRunning(false);
+      if (!isBackgroundItemRegeneration) {
+        setIsRunning(false);
+      }
     }
   };
 

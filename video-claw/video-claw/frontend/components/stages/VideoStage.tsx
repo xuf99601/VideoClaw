@@ -149,6 +149,7 @@ function ClipRow({
   const isPending = clip.status === 'pending';
   const isFailed = clip.status === 'failed' && !isRegenerating;
   const hasChanges = editDesc !== clip.description;
+  const hasVideo = Boolean(clip.selected) || clip.versions.length > 0;
 
   return (
     <div className={`flex flex-col xl:flex-row border rounded-xl overflow-hidden bg-white ${disabled ? 'opacity-50' : ''} ${
@@ -217,8 +218,8 @@ function ClipRow({
             <p className="text-xs text-gray-400 italic">无提示词</p>
           </div>
         )}
-        {/* 重新生成按钮 */}
-        {!isStageRunning && (
+        {/* 已有视频显示重新生成；失败但无视频时也必须允许重试。 */}
+        {!isStageRunning && (hasVideo || isFailed) && (
           <button
             onClick={onRegenerate}
             disabled={disabled}
@@ -238,27 +239,44 @@ function ClipRow({
 
       {/* 右侧: 视频画廊 / 占位 */}
       <div className="flex-1 min-w-0 p-3 flex items-center">
-        {isRunning && !clip.versions.length ? (
+        {isRunning && !hasVideo ? (
           <div className="flex items-center justify-center h-32 aspect-video bg-gray-50 rounded-lg border border-dashed border-gray-200">
             <div className="flex items-center gap-2 text-gray-400 text-xs px-4">
               <Loader className="w-4 h-4 animate-spin" />
               <span>正在生成视频...</span>
             </div>
           </div>
-        ) : isPending && !clip.versions.length ? (
+        ) : isPending && !hasVideo ? (
           <div className="flex items-center justify-center h-32 aspect-video bg-gray-50/30 rounded-lg border border-dashed border-gray-200">
             <div className="flex items-center gap-2 text-gray-400 text-xs px-4">
               <span>等待生成视频...</span>
             </div>
           </div>
-        ) : isFailed && !clip.versions.length ? (
-          <div
-            className="flex items-center justify-center h-32 aspect-video bg-red-50/50 rounded-lg border border-dashed border-red-200 cursor-pointer hover:bg-red-100/50 transition-colors"
-            onClick={onRegenerate}
-          >
+        ) : isFailed && !hasVideo ? (
+          <div className="flex items-center justify-center h-32 aspect-video bg-red-50/50 rounded-lg border border-dashed border-red-200">
             <div className="flex flex-col items-center gap-1 text-red-400 text-xs px-4">
               <AlertCircle className="w-4 h-4" />
-              <span>生成失败，点击重试</span>
+              <span>生成失败</span>
+              {!isStageRunning && (
+                <button
+                  onClick={onRegenerate}
+                  disabled={disabled}
+                  className={`mt-1 inline-flex items-center gap-1 px-2 py-1 rounded-lg text-[10px] font-medium transition-colors ${
+                    disabled
+                      ? 'text-gray-400 bg-gray-100 cursor-not-allowed'
+                      : 'text-red-600 bg-red-50 hover:bg-red-100'
+                  }`}
+                >
+                  <RefreshCw className="w-2.5 h-2.5" />
+                  点击重试
+                </button>
+              )}
+            </div>
+          </div>
+        ) : !hasVideo ? (
+          <div className="flex items-center justify-center h-32 aspect-video bg-gray-50/30 rounded-lg border border-dashed border-gray-200">
+            <div className="flex items-center gap-2 text-gray-400 text-xs px-4">
+              <span>暂无视频</span>
             </div>
           </div>
         ) : (
@@ -336,6 +354,7 @@ export default function VideoStage({ state, sessionId, onConfirm, onIntervene, o
   const [selectedVersions, setSelectedVersions] = useState<Record<string, string>>({});
   const [editDescs, setEditDescs] = useState<Record<string, string>>({});
   const [regeneratingIds, setRegeneratingIds] = useState<Set<string>>(new Set());
+  const regenerationStartCounts = useRef<Record<string, number>>({});
   const [editingIds, setEditingIds] = useState<Set<string>>(new Set());
   const [savingIds, setSavingIds] = useState<Set<string>>(new Set());
 
@@ -350,11 +369,26 @@ export default function VideoStage({ state, sessionId, onConfirm, onIntervene, o
     }
   }, [clips]);
 
-  // 当 artifact 更新时清除重新生成状态
+  // 当对应片段新增版本或失败时，仅清除该片段的重新生成状态，支持多个任务并行。
   useEffect(() => {
-    if (regeneratingIds.size > 0) setRegeneratingIds(new Set());
+    if (regeneratingIds.size === 0) return;
+    setRegeneratingIds(prev => {
+      let changed = false;
+      const next = new Set(prev);
+      clips.forEach(clip => {
+        if (!next.has(clip.id)) return;
+        const startCount = regenerationStartCounts.current[clip.id] ?? 0;
+        const currentCount = clip.versions?.length ?? 0;
+        if (currentCount > startCount || clip.status === 'failed') {
+          next.delete(clip.id);
+          delete regenerationStartCounts.current[clip.id];
+          changed = true;
+        }
+      });
+      return changed ? next : prev;
+    });
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [state.artifact]);
+  }, [clips]);
 
   const hasClips = clips.length > 0;
   const canEdit = state.status === 'waiting' || state.status === 'completed';
@@ -413,6 +447,8 @@ export default function VideoStage({ state, sessionId, onConfirm, onIntervene, o
   };
 
   const handleRegenerate = (clipId: string) => {
+    const clip = clips.find(c => c.id === clipId);
+    regenerationStartCounts.current[clipId] = clip?.versions?.length ?? 0;
     setRegeneratingIds(prev => new Set(prev).add(clipId));
     onIntervene({ regenerate_clips: [clipId] });
   };

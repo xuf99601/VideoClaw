@@ -513,6 +513,101 @@ class WorkflowEngine:
                 # 已经有数据且没有 pending 项，标记为完成
                 state.status[s_val] = "completed"
 
+    @staticmethod
+    def _is_background_item_regeneration(stage: WorkflowStage, intervention: Optional[Dict]) -> bool:
+        if not isinstance(intervention, dict):
+            return False
+        if stage == WorkflowStage.CHARACTER_DESIGN:
+            return isinstance(intervention.get("regenerate_characters"), list) or isinstance(intervention.get("regenerate_settings"), list)
+        if stage == WorkflowStage.REFERENCE_GENERATION:
+            return isinstance(intervention.get("regenerate_scenes"), list)
+        if stage == WorkflowStage.VIDEO_GENERATION:
+            return isinstance(intervention.get("regenerate_clips"), list)
+        return False
+
+    @staticmethod
+    def _background_regeneration_targets(stage: WorkflowStage, intervention: Optional[Dict]) -> Dict[str, Set[str]]:
+        if not isinstance(intervention, dict):
+            return {}
+        if stage == WorkflowStage.CHARACTER_DESIGN:
+            return {
+                "characters": set(intervention.get("regenerate_characters") or []),
+                "settings": set(intervention.get("regenerate_settings") or []),
+            }
+        if stage == WorkflowStage.REFERENCE_GENERATION:
+            return {"scenes": set(intervention.get("regenerate_scenes") or [])}
+        if stage == WorkflowStage.VIDEO_GENERATION:
+            return {"clips": set(intervention.get("regenerate_clips") or [])}
+        return {}
+
+    @staticmethod
+    def _merge_item_regeneration_payload(
+        existing: Any,
+        payload: Any,
+        item_keys: List[str],
+        target_ids_by_key: Optional[Dict[str, Set[str]]] = None,
+    ) -> Dict:
+        """Merge concurrent single-item regeneration results without clobbering fresher items."""
+        if not isinstance(existing, dict):
+            existing = {}
+        if not isinstance(payload, dict):
+            return copy.deepcopy(existing)
+
+        merged = copy.deepcopy(existing)
+        for key, value in payload.items():
+            if key not in item_keys:
+                merged[key] = copy.deepcopy(value)
+
+        for key in item_keys:
+            existing_items = merged.get(key, [])
+            payload_items = payload.get(key, [])
+            if not isinstance(existing_items, list):
+                existing_items = []
+            if not isinstance(payload_items, list):
+                merged[key] = existing_items
+                continue
+
+            target_ids = (target_ids_by_key or {}).get(key)
+            by_id = {
+                item.get("id"): copy.deepcopy(item)
+                for item in existing_items
+                if isinstance(item, dict) and item.get("id")
+            }
+            order = [
+                item.get("id")
+                for item in existing_items
+                if isinstance(item, dict) and item.get("id")
+            ]
+
+            for item in payload_items:
+                if not isinstance(item, dict) or not item.get("id"):
+                    continue
+                item_id = item["id"]
+                if target_ids is not None and item_id not in target_ids:
+                    continue
+                current = by_id.get(item_id)
+                if item_id not in order:
+                    order.append(item_id)
+                if not current:
+                    by_id[item_id] = copy.deepcopy(item)
+                    continue
+                current_versions = current.get("versions") if isinstance(current.get("versions"), list) else []
+                item_versions = item.get("versions") if isinstance(item.get("versions"), list) else []
+                if len(item_versions) > len(current_versions):
+                    by_id[item_id] = {**current, **copy.deepcopy(item)}
+                elif len(item_versions) == len(current_versions):
+                    merged_item = {**current, **copy.deepcopy(item)}
+                    if not item.get("selected") and current.get("selected"):
+                        merged_item["selected"] = current.get("selected")
+                    if not item_versions and current_versions:
+                        merged_item["versions"] = current_versions
+                    if current.get("status") == "failed" and item.get("status") == "done":
+                        merged_item["status"] = "failed"
+                    by_id[item_id] = merged_item
+
+            merged[key] = [by_id[item_id] for item_id in order if item_id in by_id]
+        return merged
+
     async def execute_stage(self,
                             state: WorkflowState,
                             stage: WorkflowStage,
@@ -533,6 +628,7 @@ class WorkflowEngine:
 
         agent = self.agent_factories[stage]()
         active_registered = False
+        background_item_regeneration = self._is_background_item_regeneration(stage, intervention)
 
         # 合并会话级停止信号与请求级取消检查
         session_stop = self.get_stop_event(state.session_id)
@@ -619,27 +715,28 @@ class WorkflowEngine:
         if progress_callback:
             agent.set_progress_callback(wrapped_progress_callback)
 
-        with self._state_lock:
-            if state.session_id in self._active_sessions:
-                raise RuntimeError(f"Session {state.session_id} is already running a stage.")
-            self._active_sessions.add(state.session_id)
-            active_registered = True
-            state.current_stage = stage
-            state.status[stage.value] = "running"
-            state.updated_at = datetime.now()
-            state.stage_progress[stage.value] = {
-                "phase": stage.value,
-                "step": "启动中...",
-                "message": "启动中...",
-                "percent": 0,
-                "updated_at": time.time(),
-            }
-            try:
-                self.save_session_to_disk(state.session_id)
-            except Exception:
-                self._active_sessions.discard(state.session_id)
-                active_registered = False
-                raise
+        if not background_item_regeneration:
+            with self._state_lock:
+                if state.session_id in self._active_sessions:
+                    raise RuntimeError(f"Session {state.session_id} is already running a stage.")
+                self._active_sessions.add(state.session_id)
+                active_registered = True
+                state.current_stage = stage
+                state.status[stage.value] = "running"
+                state.updated_at = datetime.now()
+                state.stage_progress[stage.value] = {
+                    "phase": stage.value,
+                    "step": "启动中...",
+                    "message": "启动中...",
+                    "percent": 0,
+                    "updated_at": time.time(),
+                }
+                try:
+                    self.save_session_to_disk(state.session_id)
+                except Exception:
+                    self._active_sessions.discard(state.session_id)
+                    active_registered = False
+                    raise
 
         try:
             result = await agent.process(input_data, intervention=intervention)
@@ -668,6 +765,17 @@ class WorkflowEngine:
                         state.artifacts[stage.value] = clean_art
                 else:
                     # 其他阶段正常执行跨阶段同步和赋值
+                    if background_item_regeneration:
+                        if stage == WorkflowStage.CHARACTER_DESIGN:
+                            keys = ["characters", "settings"]
+                        elif stage == WorkflowStage.REFERENCE_GENERATION:
+                            keys = ["scenes"]
+                        elif stage == WorkflowStage.VIDEO_GENERATION:
+                            keys = ["clips"]
+                        else:
+                            keys = []
+                        target_ids = self._background_regeneration_targets(stage, intervention)
+                        payload = self._merge_item_regeneration_payload(state.artifacts.get(stage.value, {}), payload, keys, target_ids)
                     self._sync_artifacts_cross_stages(state, stage, payload)
                     state.artifacts[stage.value] = payload
 
@@ -699,7 +807,8 @@ class WorkflowEngine:
 
         except asyncio.CancelledError:
             with self._state_lock:
-                state.status[stage.value] = "stopped"
+                if not background_item_regeneration:
+                    state.status[stage.value] = "stopped"
                 state.error = None
                 state.updated_at = datetime.now()
                 state.stage_progress[stage.value] = {
@@ -714,7 +823,8 @@ class WorkflowEngine:
 
         except Exception as e:
             with self._state_lock:
-                state.status[stage.value] = "error"
+                if not background_item_regeneration:
+                    state.status[stage.value] = "error"
                 state.error = str(e)
                 state.updated_at = datetime.now()
                 state.stage_progress[stage.value] = {
